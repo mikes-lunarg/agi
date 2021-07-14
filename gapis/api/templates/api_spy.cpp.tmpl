@@ -183,9 +183,73 @@
     {{$synthetic := GetAnnotation $ "synthetic"}}
     {{$retTy     := $.Return.Type}}
 
+    {{if eq $name "vkCmdBeginDebugUtilsLabelEXT"}}
+    char gGlColor[1024];
+    {{end}}
+
+    {{if eq $name "vkCmdBindVertexBuffers"}}
+    VkBuffer gColorBuffer;
+    VkDeviceSize gColorOffset;
+    {{end}}
+
+    {{if eq $name "vkBindBufferMemory"}}
+    std::map<VkBuffer, std::tuple<VkDeviceMemory, VkDeviceSize>> gBufferBindings;
+    {{end}}
+
+    {{if eq $name "vkCmdDraw"}}
+    extern VkBuffer gColorBuffer;
+    extern VkDeviceSize gColorOffset;
+    extern char gGlColor[1024];
+    extern std::map<VkBuffer, std::tuple<VkDeviceMemory, VkDeviceSize>> gBufferBindings;
+    {{end}}
+
     {{Template "C++.ReturnType" $}} {{$spyname}}::{{$name}}({{Macro "C++.CallParameters" $ | Strings "CallObserver* observer" | JoinWith ", "}}) {
       GAPID_DEBUG({{Template "C++.PrintfCommandCall" $}});
 ¶
+      {{if eq $name "vkCmdBeginDebugUtilsLabelEXT"}}
+      if (strstr(pLabelInfo->mpLabelName, "glColor4f"))
+      {
+        strcpy(gGlColor, pLabelInfo->mpLabelName);
+      }
+      {{end}}
+
+      {{if eq $name "vkCmdBindVertexBuffers"}}
+      if (bindingCount == 8 && firstBinding == 0)
+      {
+        gColorBuffer = pBuffers[2];
+        gColorOffset = pOffsets[2];
+      }
+      {{end}}
+
+      {{if eq $name "vkBindBufferMemory"}}
+      gBufferBindings[buffer] = std::make_tuple(memory, memoryOffset);
+      {{end}}
+
+      {{if eq $name "vkCmdDraw"}}
+      if (vertexCount == 12 || vertexCount == 96)
+      {
+        GAPID_INFO("vkCmdDraw %d:", vertexCount);
+        GAPID_INFO("    %s", gGlColor);
+        GAPID_INFO("    colorBuffer = %" PRIu64 " colorOffset = %" PRIu64, gColorBuffer, gColorOffset);
+        auto mem_info = gBufferBindings.find(gColorBuffer);
+        if (mem_info != gBufferBindings.end())
+        {
+          const auto& memory = std::get<0>(mem_info->second);
+          const auto& memoryOffset = std::get<1>(mem_info->second);
+          GAPID_INFO("    memory = %" PRIu64 " memoryOffset = %" PRIu64, memory, memoryOffset);
+          float* color;
+          mImports.mVkDeviceFunctions[mState.CommandBuffers[commandBuffer]->mDevice].vkMapMemory(mState.CommandBuffers[commandBuffer]->mDevice, memory, memoryOffset + gColorOffset, 16, 0, (void**)&color);
+          GAPID_INFO("    %p %f %f %f %f", color, color[0], color[1], color[2], color[3]);
+
+          mImports.mVkDeviceFunctions[mState.CommandBuffers[commandBuffer]->mDevice].vkUnmapMemory(mState.CommandBuffers[commandBuffer]->mDevice, memory);
+        }
+        else
+        {
+          GAPID_INFO("    BUFFER NOT BOUND TO MEMORY");
+        }
+      }
+      {{end}}
+
       {{if (and (not (GetAnnotation $ "synthetic")) (not (GetAnnotation $ "override")))}}
         if (§
         {{if (GetAnnotation $ "indirect")}}
