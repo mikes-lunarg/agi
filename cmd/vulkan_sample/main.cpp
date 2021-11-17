@@ -182,6 +182,8 @@ static const char* vk_result_to_string(VkResult result) {
   }
 }
 
+std::string kDrawCmd = "";
+
 #if _WIN32
 HWND kNativeWindowHandle;
 HINSTANCE kNativeHInstance;
@@ -322,6 +324,57 @@ void ProcessNativeWindowEvents() {
   }
 }
 
+// Retrieve the program argument string from the intent extras
+std::string GetIntentExtra(struct android_app* app, const char* key)
+{
+    std::string value;
+    JavaVM*     jni_vm       = nullptr;
+    jobject     jni_activity = nullptr;
+    JNIEnv*     env          = nullptr;
+
+    if ((app != nullptr) && (app->activity != nullptr))
+    {
+        jni_vm       = app->activity->vm;
+        jni_activity = app->activity->clazz;
+    }
+
+    if ((jni_vm != nullptr) && (jni_activity != 0) && (jni_vm->AttachCurrentThread(&env, nullptr) == JNI_OK))
+    {
+        jclass    activity_class = env->GetObjectClass(jni_activity);
+        jmethodID get_intent     = env->GetMethodID(activity_class, "getIntent", "()Landroid/content/Intent;");
+        jobject   intent         = env->CallObjectMethod(jni_activity, get_intent);
+
+        if (intent)
+        {
+            jclass    intent_class = env->GetObjectClass(intent);
+            jmethodID get_string_extra =
+                env->GetMethodID(intent_class, "getStringExtra", "(Ljava/lang/String;)Ljava/lang/String;");
+
+            jvalue extra_key;
+            extra_key.l = env->NewStringUTF(key);
+
+            jstring extra = static_cast<jstring>(env->CallObjectMethodA(intent, get_string_extra, &extra_key));
+
+            if (extra)
+            {
+                const char* utf_chars = env->GetStringUTFChars(extra, nullptr);
+
+                value = utf_chars;
+
+                env->ReleaseStringUTFChars(extra, utf_chars);
+                env->DeleteLocalRef(extra);
+            }
+
+            env->DeleteLocalRef(extra_key.l);
+            env->DeleteLocalRef(intent);
+        }
+
+        jni_vm->DetachCurrentThread();
+    }
+
+    return value;
+}
+
 void android_main(struct android_app* app) {
   kAndroidApp = app;
   kAndroidApp->onAppCmd = processAppCmd;
@@ -345,6 +398,7 @@ void android_main(struct android_app* app) {
     }
   }
 
+  kDrawCmd = GetIntentExtra(app, "DrawCmd");
   main_impl();
 };
 
@@ -501,8 +555,9 @@ uint32_t inline GetMemoryIndex(
 
 void usage() {
   std::cout << "Options: \n";
-  std::cout << "-h=<height> Set desktop window height (default: 768)\n";
-  std::cout << "-w=<width>  Set desktop window width (default: 1024)\n";
+  std::cout << "-h=<height>   Set desktop window height (default: 768)\n";
+  std::cout << "-w=<width>    Set desktop window width (default: 1024)\n";
+  std::cout << "-d=<draw_cmd> Use the specified draw cmd (ie vkCmdDraw)\n";
 }
 
 #ifdef __ANDROID__
@@ -521,6 +576,8 @@ int main(int argc, const char** argv) {
       height = std::stoi(&(arg[3]));
     } else if (arg.compare(0, 3, "-w=") == 0) {
       width = std::stoi(&(arg[3]));
+    } else if (arg.compare(0, 3, "-d=") == 0) {
+      kDrawCmd = &(arg[3]);
     } else {
       std::cout << "Unrecognized argument: " << arg << '\n';
       usage();
@@ -745,7 +802,8 @@ int main(int argc, const char** argv) {
         &priority,
     };
 
-    const char* device_extensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    const char* device_extensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+                                       VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME};
 
     VkDeviceCreateInfo create_info{
         VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -755,7 +813,7 @@ int main(int argc, const char** argv) {
         &queue_create_info,
         0,
         nullptr,
-        1,
+        2,
         device_extensions,
         nullptr,
     };
@@ -847,7 +905,12 @@ int main(int argc, const char** argv) {
   LOAD_DEVICE_FUNCTION(vkQueueSubmit);
   LOAD_DEVICE_FUNCTION(vkCmdCopyBuffer);
   LOAD_DEVICE_FUNCTION(vkCmdCopyBufferToImage);
+  LOAD_DEVICE_FUNCTION(vkCmdDraw);
   LOAD_DEVICE_FUNCTION(vkCmdDrawIndexed);
+  LOAD_DEVICE_FUNCTION(vkCmdDrawIndirect);
+  LOAD_DEVICE_FUNCTION(vkCmdDrawIndexedIndirect);
+  LOAD_DEVICE_FUNCTION(vkCmdDrawIndirectCountKHR);
+  LOAD_DEVICE_FUNCTION(vkCmdDrawIndexedIndirectCountKHR);
   LOAD_DEVICE_FUNCTION(vkCmdPipelineBarrier);
   LOAD_DEVICE_FUNCTION(vkCmdBindPipeline);
   LOAD_DEVICE_FUNCTION(vkCmdBindVertexBuffers);
@@ -880,19 +943,29 @@ int main(int argc, const char** argv) {
   } while (false)
 
   // Set debug labels of objects created before the device.
-  SET_DEBUG_LABEL(instance, VK_OBJECT_TYPE_INSTANCE, "KubieInstance");
-  SET_DEBUG_LABEL(physical_device, VK_OBJECT_TYPE_PHYSICAL_DEVICE,
-                  "KubiePhysDevice");
-  SET_DEBUG_LABEL(device, VK_OBJECT_TYPE_DEVICE, "KubieDevice");
-  SET_DEBUG_LABEL(queue, VK_OBJECT_TYPE_QUEUE, "KubieQueue");
-  SET_DEBUG_LABEL(surface, VK_OBJECT_TYPE_SURFACE_KHR, "KubieSurface");
-  SET_DEBUG_LABEL(swapchain, VK_OBJECT_TYPE_SWAPCHAIN_KHR, "KubieSwapchain");
+  //SET_DEBUG_LABEL(instance, VK_OBJECT_TYPE_INSTANCE, "KubieInstance");
+  //SET_DEBUG_LABEL(physical_device, VK_OBJECT_TYPE_PHYSICAL_DEVICE,
+  //                "KubiePhysDevice");
+  //SET_DEBUG_LABEL(device, VK_OBJECT_TYPE_DEVICE, "KubieDevice");
+  //SET_DEBUG_LABEL(queue, VK_OBJECT_TYPE_QUEUE, "KubieQueue");
+  //SET_DEBUG_LABEL(surface, VK_OBJECT_TYPE_SURFACE_KHR, "KubieSurface");
+  //SET_DEBUG_LABEL(swapchain, VK_OBJECT_TYPE_SWAPCHAIN_KHR, "KubieSwapchain");
 
   // Immutable Data
   VkBuffer vertex_buffer;
   VkDeviceMemory vertex_buffer_memory;
   VkBuffer index_buffer;
   VkDeviceMemory index_buffer_memory;
+  VkBuffer expanded_vertex_buffer;
+  VkDeviceMemory expanded_vertex_buffer_memory;
+  VkBuffer draw_indirect_buffer;
+  VkDeviceMemory draw_indirect_buffer_memory;
+  VkBuffer draw_indexed_indirect_buffer;
+  VkDeviceMemory draw_indexed_indirect_buffer_memory;
+  VkBuffer draw_count_buffer;
+  VkDeviceMemory draw_count_buffer_memory;
+  VkBuffer draw_indexed_restart_buffer;
+  VkDeviceMemory draw_indexed_restart_buffer_memory;
   VkImage texture;
   VkDeviceMemory texture_memory;
   VkSampler sampler;
@@ -1043,6 +1116,196 @@ int main(int argc, const char** argv) {
     SET_DEBUG_LABEL(texture_memory, VK_OBJECT_TYPE_DEVICE_MEMORY,
                     "KubieTextureMem");
     REQUIRE_SUCCESS(vkBindImageMemory(device, texture, texture_memory, 0));
+  }
+
+  // Create the expanded vertex buffer && back it with memory
+  {
+    VkBufferCreateInfo create_info{
+        VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        nullptr,
+        0,
+        cube::model.num_indices * (3 + 2 + 3) * sizeof(float),
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        VK_SHARING_MODE_EXCLUSIVE,
+        0,
+        nullptr};
+    REQUIRE_SUCCESS(
+        vkCreateBuffer(device, &create_info, nullptr, &expanded_vertex_buffer));
+    SET_DEBUG_LABEL(expanded_vertex_buffer, VK_OBJECT_TYPE_BUFFER, "KubieExpandedVertices");
+
+    VkMemoryRequirements memory_requirements;
+    vkGetBufferMemoryRequirements(device, expanded_vertex_buffer, &memory_requirements);
+
+    uint32_t memory_index =
+        GetMemoryIndex(memory_properties, memory_requirements.memoryTypeBits,
+                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (memory_index == static_cast<uint32_t>(-1)) {
+      write_error(kOutHandle, "Could not find memory index for Vertex Buffer");
+      return -1;
+    }
+
+    VkMemoryAllocateInfo allocate_info{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                       nullptr, memory_requirements.size,
+                                       memory_index};
+
+    REQUIRE_SUCCESS(vkAllocateMemory(device, &allocate_info, nullptr,
+                                     &expanded_vertex_buffer_memory));
+    SET_DEBUG_LABEL(expanded_vertex_buffer_memory, VK_OBJECT_TYPE_DEVICE_MEMORY,
+                    "KubieExpandedVerticesMem");
+    REQUIRE_SUCCESS(
+        vkBindBufferMemory(device, expanded_vertex_buffer, expanded_vertex_buffer_memory, 0));
+  }
+
+  // Create the draw indirect buffer && back it with memory
+  {
+    VkBufferCreateInfo create_info{
+        VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        nullptr,
+        0,
+        sizeof(VkDrawIndirectCommand),
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        VK_SHARING_MODE_EXCLUSIVE,
+        0,
+        nullptr};
+    REQUIRE_SUCCESS(
+        vkCreateBuffer(device, &create_info, nullptr, &draw_indirect_buffer));
+    SET_DEBUG_LABEL(draw_indirect_buffer, VK_OBJECT_TYPE_BUFFER, "KubieDrawIndirect");
+
+    VkMemoryRequirements memory_requirements;
+    vkGetBufferMemoryRequirements(device, draw_indirect_buffer, &memory_requirements);
+
+    uint32_t memory_index =
+        GetMemoryIndex(memory_properties, memory_requirements.memoryTypeBits,
+                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (memory_index == static_cast<uint32_t>(-1)) {
+      write_error(kOutHandle, "Could not find memory index for Vertex Buffer");
+      return -1;
+    }
+
+    VkMemoryAllocateInfo allocate_info{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                       nullptr, memory_requirements.size,
+                                       memory_index};
+
+    REQUIRE_SUCCESS(vkAllocateMemory(device, &allocate_info, nullptr,
+                                     &draw_indirect_buffer_memory));
+    SET_DEBUG_LABEL(draw_indirect_buffer_memory, VK_OBJECT_TYPE_DEVICE_MEMORY,
+                    "KubieDrawIndirectMem");
+    REQUIRE_SUCCESS(
+        vkBindBufferMemory(device, draw_indirect_buffer, draw_indirect_buffer_memory, 0));
+  }
+
+  // Create the draw indirect buffer && back it with memory
+  {
+    VkBufferCreateInfo create_info{
+        VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        nullptr,
+        0,
+        sizeof(VkDrawIndirectCommand),
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        VK_SHARING_MODE_EXCLUSIVE,
+        0,
+        nullptr};
+    REQUIRE_SUCCESS(
+        vkCreateBuffer(device, &create_info, nullptr, &draw_indexed_indirect_buffer));
+    SET_DEBUG_LABEL(draw_indexed_indirect_buffer, VK_OBJECT_TYPE_BUFFER, "KubieDrawIndexedIndirect");
+
+    VkMemoryRequirements memory_requirements;
+    vkGetBufferMemoryRequirements(device, draw_indexed_indirect_buffer, &memory_requirements);
+
+    uint32_t memory_index =
+        GetMemoryIndex(memory_properties, memory_requirements.memoryTypeBits,
+                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (memory_index == static_cast<uint32_t>(-1)) {
+      write_error(kOutHandle, "Could not find memory index for Vertex Buffer");
+      return -1;
+    }
+
+    VkMemoryAllocateInfo allocate_info{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                       nullptr, memory_requirements.size,
+                                       memory_index};
+
+    REQUIRE_SUCCESS(vkAllocateMemory(device, &allocate_info, nullptr,
+                                     &draw_indexed_indirect_buffer_memory));
+    SET_DEBUG_LABEL(draw_indexed_indirect_buffer_memory, VK_OBJECT_TYPE_DEVICE_MEMORY,
+                    "KubieDrawIndexedIndirectMem");
+    REQUIRE_SUCCESS(
+        vkBindBufferMemory(device, draw_indexed_indirect_buffer, draw_indexed_indirect_buffer_memory, 0));
+  }
+
+  // Create the draw count buffer && back it with memory
+  {
+    VkBufferCreateInfo create_info{
+        VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        nullptr,
+        0,
+        sizeof(VkDrawIndirectCommand),
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        VK_SHARING_MODE_EXCLUSIVE,
+        0,
+        nullptr};
+    REQUIRE_SUCCESS(
+        vkCreateBuffer(device, &create_info, nullptr, &draw_count_buffer));
+    SET_DEBUG_LABEL(draw_count_buffer, VK_OBJECT_TYPE_BUFFER, "KubieDrawCount");
+
+    VkMemoryRequirements memory_requirements;
+    vkGetBufferMemoryRequirements(device, draw_count_buffer, &memory_requirements);
+
+    uint32_t memory_index =
+        GetMemoryIndex(memory_properties, memory_requirements.memoryTypeBits,
+                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (memory_index == static_cast<uint32_t>(-1)) {
+      write_error(kOutHandle, "Could not find memory index for Vertex Buffer");
+      return -1;
+    }
+
+    VkMemoryAllocateInfo allocate_info{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                       nullptr, memory_requirements.size,
+                                       memory_index};
+
+    REQUIRE_SUCCESS(vkAllocateMemory(device, &allocate_info, nullptr,
+                                     &draw_count_buffer_memory));
+    SET_DEBUG_LABEL(draw_count_buffer_memory, VK_OBJECT_TYPE_DEVICE_MEMORY,
+                    "KubieDrawCountMem");
+    REQUIRE_SUCCESS(
+        vkBindBufferMemory(device, draw_count_buffer, draw_count_buffer_memory, 0));
+  }
+
+  // Create the draw indexed w/ restart buffer
+  {
+    VkBufferCreateInfo create_info{
+        VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        nullptr,
+        0,
+        sizeof(uint32_t) * 30,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+        VK_SHARING_MODE_EXCLUSIVE,
+        0,
+        nullptr};
+    REQUIRE_SUCCESS(
+        vkCreateBuffer(device, &create_info, nullptr, &draw_indexed_restart_buffer));
+    SET_DEBUG_LABEL(draw_count_buffer, VK_OBJECT_TYPE_BUFFER, "KubieDrawIndexedRestart");
+
+    VkMemoryRequirements memory_requirements;
+    vkGetBufferMemoryRequirements(device, draw_indexed_restart_buffer, &memory_requirements);
+
+    uint32_t memory_index =
+        GetMemoryIndex(memory_properties, memory_requirements.memoryTypeBits,
+                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (memory_index == static_cast<uint32_t>(-1)) {
+      write_error(kOutHandle, "Could not find memory index for Vertex Buffer");
+      return -1;
+    }
+
+    VkMemoryAllocateInfo allocate_info{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                                       nullptr, memory_requirements.size,
+                                       memory_index};
+
+    REQUIRE_SUCCESS(vkAllocateMemory(device, &allocate_info, nullptr,
+                                     &draw_indexed_restart_buffer_memory));
+    SET_DEBUG_LABEL(draw_count_buffer_memory, VK_OBJECT_TYPE_DEVICE_MEMORY,
+                    "KubieDrawIndexedRestartMem");
+    REQUIRE_SUCCESS(
+        vkBindBufferMemory(device, draw_indexed_restart_buffer, draw_indexed_restart_buffer_memory, 0));
   }
 
   {
@@ -1214,7 +1477,6 @@ int main(int argc, const char** argv) {
         &bindings,
         3,
         attributes};
-
     VkPipelineInputAssemblyStateCreateInfo input_assembly_create_info{
         VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
         nullptr,
@@ -1222,6 +1484,10 @@ int main(int argc, const char** argv) {
         VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
         false,
     };
+    if (kDrawCmd == "vkCmdDrawIndexedRestart") {
+      input_assembly_create_info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+      input_assembly_create_info.primitiveRestartEnable = true;
+    }
 
     VkViewport viewport{
         0.0f,
@@ -1571,7 +1837,12 @@ int main(int argc, const char** argv) {
           0,
           cube::model.num_indices * sizeof(uint32_t) +
               cube::model.num_vertices * (3 + 2 + 3) * sizeof(float) +
-              sizeof(icon::texture.data),
+              sizeof(icon::texture.data) + 
+              cube::model.num_indices * (3 + 2 + 3) * sizeof(float) +
+              sizeof(VkDrawIndirectCommand) +
+              sizeof(VkDrawIndexedIndirectCommand) +
+              sizeof(uint32_t) + 
+              sizeof(uint32_t) * 30,
           VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
           VK_SHARING_MODE_EXCLUSIVE,
           0,
@@ -1632,7 +1903,54 @@ int main(int argc, const char** argv) {
     size_t image_offset = kVertexBufferSize + kIndexBufferSize;
     memcpy(staging_buffer_location + image_offset, icon::texture.data,
            sizeof(icon::texture.data));
+    
+    const size_t kExpandedVertexBufferOffset = image_offset + sizeof(icon::texture.data);
+    const uint32_t kExpandedVertexBufferSize = kVertexSize * cube::model.num_indices;
+    printf("indices: ");
+    for (size_t i = 0; i < cube::model.num_indices; ++i) {
+      printf("%d, ", cube::model.indices[i]);
+      memcpy(staging_buffer_location + kExpandedVertexBufferOffset + i * kVertexSize,
+             cube::model.positions + cube::model.indices[i] * 3, 3 * sizeof(float));
+      memcpy(staging_buffer_location + kExpandedVertexBufferOffset + i * kVertexSize + 3 * sizeof(float),
+             cube::model.uv + cube::model.indices[i] * 2, 2 * sizeof(float));
+      memcpy(staging_buffer_location + kExpandedVertexBufferOffset + i * kVertexSize + (3 + 2) * sizeof(float),
+             cube::model.normals + cube::model.indices[i] * 3, 3 * sizeof(float));
+    }
+    printf("\n");
 
+    const size_t kDrawIndirectBufferOffset = kExpandedVertexBufferOffset + kExpandedVertexBufferSize;
+    const uint32_t kDrawIndirectBufferSize = sizeof(VkDrawIndirectCommand);
+    VkDrawIndirectCommand draw_indirect_command;
+    draw_indirect_command.vertexCount = cube::model.num_indices;
+    draw_indirect_command.instanceCount = 1;
+    draw_indirect_command.firstVertex = 0;
+    draw_indirect_command.firstInstance = 0;
+    memcpy(staging_buffer_location + kDrawIndirectBufferOffset, &draw_indirect_command, sizeof(VkDrawIndirectCommand));
+
+    const size_t kDrawIndexedIndirectBufferOffset = kDrawIndirectBufferOffset + kDrawIndirectBufferSize;
+    const uint32_t kDrawIndexedIndirectBufferSize = sizeof(VkDrawIndexedIndirectCommand);
+    VkDrawIndexedIndirectCommand draw_indexed_indirect_command;
+    draw_indexed_indirect_command.indexCount = cube::model.num_indices;
+    draw_indexed_indirect_command.instanceCount = 1;
+    draw_indexed_indirect_command.firstIndex = 0;
+    draw_indexed_indirect_command.vertexOffset = 0;
+    draw_indexed_indirect_command.firstInstance = 0;
+    memcpy(staging_buffer_location + kDrawIndexedIndirectBufferOffset, &draw_indexed_indirect_command, kDrawIndexedIndirectBufferSize);
+
+    const size_t kDrawCountBufferOffset = kDrawIndexedIndirectBufferOffset + kDrawIndexedIndirectBufferSize;
+    const uint32_t kDrawCountBufferSize = sizeof(uint32_t);
+    uint32_t draw_count = 1;
+    memcpy(staging_buffer_location + kDrawCountBufferOffset, &draw_count, kDrawCountBufferSize);
+
+    const size_t kDrawIndexedRestartBufferOffset = kDrawCountBufferOffset + kDrawCountBufferSize;
+    const uint32_t kDrawIndexedRestartBufferSize = sizeof(uint32_t) * 30;
+    uint32_t restart_indices[] = {0,  1,  2,  3,  0xffffffff,
+                                  4,  5,  6,  7,  0xffffffff,
+                                  8,  9,  10, 11, 0xffffffff,
+                                  12, 13, 14, 15, 0xffffffff,
+                                  16, 17, 18, 19, 0xffffffff,
+                                  20, 21, 22, 23, 0xffffffff};
+    memcpy(staging_buffer_location + kDrawIndexedRestartBufferOffset, restart_indices, kDrawIndexedRestartBufferSize);
     VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr,
                               staging_buffer_memory, 0, VK_WHOLE_SIZE};
     REQUIRE_SUCCESS(vkFlushMappedMemoryRanges(device, 1, &range));
@@ -1721,6 +2039,21 @@ int main(int argc, const char** argv) {
       vkCmdCopyBufferToImage(staging_command_buffer, staging_buffer, texture,
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                              &texture_copy);
+
+      VkBufferCopy expanded_vertex_copy{kExpandedVertexBufferOffset, 0, kExpandedVertexBufferSize};
+      vkCmdCopyBuffer(staging_command_buffer, staging_buffer, expanded_vertex_buffer, 1, &expanded_vertex_copy);
+
+      VkBufferCopy draw_indirect_copy{kDrawIndirectBufferOffset, 0, kDrawIndirectBufferSize};
+      vkCmdCopyBuffer(staging_command_buffer, staging_buffer, draw_indirect_buffer, 1, &draw_indirect_copy);
+
+      VkBufferCopy draw_indexed_indirect_copy{kDrawIndexedIndirectBufferOffset, 0, kDrawIndexedIndirectBufferSize};
+      vkCmdCopyBuffer(staging_command_buffer, staging_buffer, draw_indexed_indirect_buffer, 1, &draw_indexed_indirect_copy);
+
+      VkBufferCopy draw_count_copy{kDrawCountBufferOffset, 0, kDrawCountBufferSize};
+      vkCmdCopyBuffer(staging_command_buffer, staging_buffer, draw_count_buffer, 1, &draw_count_copy);
+
+      VkBufferCopy draw_indexed_restart_copy{kDrawIndexedRestartBufferOffset, 0, kDrawIndexedRestartBufferSize};
+      vkCmdCopyBuffer(staging_command_buffer, staging_buffer, draw_indexed_restart_buffer, 1, &draw_indexed_restart_copy);
 
       buffer_barriers[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
       buffer_barriers[2].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -1916,13 +2249,39 @@ int main(int argc, const char** argv) {
     vkCmdBindDescriptorSets(render_command_buffers[frame_parity],
                             VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0,
                             1, &descriptor_sets[frame_parity], 0, nullptr);
-    VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(render_command_buffers[frame_parity], 0, 1,
-                           &vertex_buffer, &offset);
-    vkCmdBindIndexBuffer(render_command_buffers[frame_parity], index_buffer, 0,
-                         VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexed(render_command_buffers[frame_parity],
-                     cube::model.num_indices, 1, 0, 0, 0);
+    if (kDrawCmd == "vkCmdDraw") {
+      VkDeviceSize offset = 0;
+      vkCmdBindVertexBuffers(render_command_buffers[frame_parity], 0, 1, &expanded_vertex_buffer, &offset);
+      vkCmdDraw(render_command_buffers[frame_parity], cube::model.num_indices, 1, 0, 0);
+    } else if (kDrawCmd == "vkCmdDrawIndexed") {
+      VkDeviceSize offset = 0;
+      vkCmdBindVertexBuffers(render_command_buffers[frame_parity], 0, 1, &vertex_buffer, &offset);
+      vkCmdBindIndexBuffer(render_command_buffers[frame_parity], index_buffer, 0, VK_INDEX_TYPE_UINT32);
+      vkCmdDrawIndexed(render_command_buffers[frame_parity], cube::model.num_indices, 1, 0, 0, 0);
+    } else if (kDrawCmd == "vkCmdDrawIndirect") {
+      VkDeviceSize offset = 0;
+      vkCmdBindVertexBuffers(render_command_buffers[frame_parity], 0, 1, &expanded_vertex_buffer, &offset);
+      vkCmdDrawIndirect(render_command_buffers[frame_parity], draw_indirect_buffer, 0, 1, sizeof(VkDrawIndirectCommand));
+    } else if (kDrawCmd == "vkCmdDrawIndexedIndirect") {
+      VkDeviceSize offset = 0;
+      vkCmdBindVertexBuffers(render_command_buffers[frame_parity], 0, 1, &vertex_buffer, &offset);
+      vkCmdBindIndexBuffer(render_command_buffers[frame_parity], index_buffer, 0, VK_INDEX_TYPE_UINT32);
+      vkCmdDrawIndexedIndirect(render_command_buffers[frame_parity], draw_indexed_indirect_buffer, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
+    } else if (kDrawCmd == "vkCmdDrawIndirectCount") {
+      VkDeviceSize offset = 0;
+      vkCmdBindVertexBuffers(render_command_buffers[frame_parity], 0, 1, &expanded_vertex_buffer, &offset);
+      vkCmdDrawIndirectCountKHR(render_command_buffers[frame_parity], draw_indirect_buffer, 0, draw_count_buffer, 0, 1, sizeof(VkDrawIndirectCommand));
+    } else if (kDrawCmd == "vkCmdDrawIndexedIndirectCount") {
+      VkDeviceSize offset = 0;
+      vkCmdBindVertexBuffers(render_command_buffers[frame_parity], 0, 1, &vertex_buffer, &offset);
+      vkCmdBindIndexBuffer(render_command_buffers[frame_parity], index_buffer, 0, VK_INDEX_TYPE_UINT32);
+      vkCmdDrawIndexedIndirectCountKHR(render_command_buffers[frame_parity], draw_indexed_indirect_buffer, 0, draw_count_buffer, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
+    } else if (kDrawCmd == "vkCmdDrawIndexedRestart") {
+      VkDeviceSize offset = 0;
+      vkCmdBindVertexBuffers(render_command_buffers[frame_parity], 0, 1, &vertex_buffer, &offset);
+      vkCmdBindIndexBuffer(render_command_buffers[frame_parity], draw_indexed_restart_buffer, 0, VK_INDEX_TYPE_UINT32);
+      vkCmdDrawIndexed(render_command_buffers[frame_parity], 29, 1, 0, 0, 0);
+    }
     vkCmdEndRenderPass(render_command_buffers[frame_parity]);
 
     REQUIRE_SUCCESS(vkEndCommandBuffer(render_command_buffers[frame_parity]));
